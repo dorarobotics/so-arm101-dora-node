@@ -22,6 +22,13 @@ logger = logging.getLogger(__name__)
 # transport itself (pyserial raises SerialException, a subclass of OSError).
 EFFORT_READ_ERRORS = (ft.FeetechError, OSError)
 
+# Position gain (P coefficient). LeRobot's SO-101 follower uses 16 on every servo, which
+# keeps the arm calm but, under gravity, leaves the elbow and the shoulder lift 2-3 deg off
+# their goals on real arms: outside the 2 deg settle tolerance, so moves end NOT_REACHED.
+# These two gravity-loaded joints use the servo's default 32; the other joints keep 16.
+P_GAIN_DEFAULT = 16
+P_GAIN = {"shoulder_lift": 32, "elbow_flex": 32}
+
 
 class ArmError(RuntimeError):
     pass
@@ -118,13 +125,15 @@ class SoArm101:
             self.bus.write(servo_id, ft.MAX_POSITION_LIMIT, c.range_max)
 
     def configure(self) -> None:
-        """Position mode and LeRobot SO-101 follower gains; gripper torque and current capped at 50%."""
+        """Position mode and LeRobot SO-101 follower gains (shoulder lift and elbow P raised,
+        see ``P_GAIN``);
+        gripper torque and current capped at 50%."""
         self.disable_torque()
         for joint, servo_id in self._id.items():
             self.bus.write(servo_id, ft.RETURN_DELAY_TIME, 0)
             self.bus.write(servo_id, ft.ACCELERATION, 254)
             self.bus.write(servo_id, ft.OPERATING_MODE, 0)
-            self.bus.write(servo_id, ft.P_COEFFICIENT, 16)
+            self.bus.write(servo_id, ft.P_COEFFICIENT, P_GAIN.get(joint, P_GAIN_DEFAULT))
             self.bus.write(servo_id, ft.I_COEFFICIENT, 0)
             self.bus.write(servo_id, ft.D_COEFFICIENT, 32)
             if joint == GRIPPER:
