@@ -158,3 +158,26 @@ def test_sync_write_transport_error_becomes_feetech_error():
     bus = ft.FeetechBus(_BrokenPort(("write",)))
     with pytest.raises(ft.FeetechError, match="transport error"):
         bus.sync_write(ft.GOAL_POSITION, {1: 2048, 2: 2048})
+
+
+class _TermiosBrokenPort(_BrokenPort):
+    """pyserial's posix backend lets termios.error escape (it is not an OSError)."""
+
+    def __init__(self, fail_on=("write", "read", "reset_input_buffer")):
+        import termios
+
+        super().__init__(fail_on)
+        self.exc = termios.error(5, "Input/output error")  # as seen when the USB adapter dropped
+
+
+@pytest.mark.parametrize("fail_on", [("write",), ("read",), ("reset_input_buffer",)])
+def test_termios_errors_become_feetech_errors(fail_on):
+    import termios
+
+    bus = ft.FeetechBus(_TermiosBrokenPort(fail_on))
+    with pytest.raises(ft.FeetechError, match="transport error") as info:
+        bus.read_position(1)
+    assert isinstance(info.value.__cause__, termios.error)
+    assert bus.ping(1) is False
+    with pytest.raises(ft.FeetechError, match="transport error"):
+        ft.FeetechBus(_TermiosBrokenPort(("write",))).sync_write(ft.GOAL_POSITION, {1: 2048})

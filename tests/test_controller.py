@@ -238,6 +238,31 @@ class _PortDropsAfter:
         self.sim.reset_input_buffer()
 
 
+class _TermiosPortDropsAfter(_PortDropsAfter):
+    """As _PortDropsAfter, but failing like pyserial's posix backend did on a real USB drop."""
+
+    def _check(self):
+        if self.dropped:
+            import termios
+
+            raise termios.error(5, "Input/output error")
+
+
+def test_a_termios_error_mid_hold_does_not_stop_the_node(rig, clock):
+    """The real failure: the adapter dropped while the arm was holding after a stopped move;
+    reset_input_buffer raised termios.error on the next state read and killed the node."""
+    controller, sim = rig
+    run(controller, clock, f"{NS}.enable_torque")
+    port = _TermiosPortDropsAfter(sim)
+    controller.arms["left"].bus._io = port
+    port.drop()
+    r = controller.handle(req(f"{NS}.get_joint_state"))  # must return, not raise
+    assert r["ok"] is False and r["code"] == "HARDWARE_ERROR" and "transport error" in r["msg"]
+    controller.state_payload()  # the state stream must not raise either
+    clock.advance(0.02)
+    controller.tick()  # nor the periodic tick
+
+
 def test_serial_port_lost_on_a_position_read_is_a_hardware_error(rig, clock):
     controller, sim = rig
     port = _PortDropsAfter(sim)

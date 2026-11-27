@@ -76,6 +76,18 @@ STATUS_ERROR_BITS = {
 }
 
 
+# What the serial transport itself raises when the USB-serial link fails. pyserial's
+# SerialException is an OSError, but its posix backend also lets termios.error escape
+# (e.g. reset_input_buffer -> tcflush after the adapter disappears), and termios.error is
+# not an OSError. Both are raised as FeetechError ("transport error") by the bus.
+try:
+    import termios
+
+    TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (OSError, termios.error)
+except ImportError:  # no termios on this platform
+    TRANSPORT_ERRORS = (OSError,)
+
+
 class FeetechError(RuntimeError):
     """A servo did not answer, answered malformed bytes, or reported a fault."""
 
@@ -124,9 +136,10 @@ class FeetechBus:
     Every unicast exchange checks the status packet's header, id, length, checksum
     and error byte, so a wrong or silent servo raises ``FeetechError`` instead of
     being mistaken for success. Errors from the serial transport itself (a USB
-    adapter unplugged, an I/O error: pyserial raises ``SerialException``, an
-    ``OSError``) are raised as ``FeetechError`` too, so every caller's bus-error
-    handling applies and nothing escapes the node's event loop.
+    adapter unplugged, an I/O error: pyserial's ``SerialException``, an ``OSError``,
+    or a raw ``termios.error`` from its posix backend; see ``TRANSPORT_ERRORS``) are
+    raised as ``FeetechError`` too, so every caller's bus-error handling applies and
+    nothing escapes the node's event loop.
     """
 
     def __init__(self, transport: Transport, *, retries: int = 1) -> None:
@@ -165,7 +178,7 @@ class FeetechBus:
             self._io.reset_input_buffer()
             self._io.write(build_packet(servo_id, instruction, params))
             status = self._io.read(expected)
-        except OSError as e:  # pyserial's SerialException is an OSError
+        except TRANSPORT_ERRORS as e:
             raise FeetechError(f"servo {servo_id}: transport error: {e}") from e
         if len(status) != expected:
             raise FeetechError(f"servo {servo_id}: no reply ({len(status)}/{expected} bytes)")
@@ -207,7 +220,7 @@ class FeetechBus:
             params += _to_bytes(value, size)
         try:
             self._io.write(build_packet(BROADCAST_ID, INSTR_SYNC_WRITE, bytes(params)))
-        except OSError as e:  # pyserial's SerialException is an OSError
+        except TRANSPORT_ERRORS as e:
             raise FeetechError(f"sync write to {sorted(values)}: transport error: {e}") from e
 
     def read_position(self, servo_id: int) -> int:
